@@ -1,0 +1,569 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Host — P2P Video Call</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{--bg:#071021;--accent:#1dd1a1;--muted:#94a3b8}
+  html,body{height:100%;margin:0;background:linear-gradient(180deg,#071021,#04101a);font-family:Inter,system-ui,Arial;color:white}
+  .screen{height:100%;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;padding:12px;box-sizing:border-box}
+
+  /* Main video fills screen */
+  #remoteVideo{width:100%;height:100vh;background:#000;border-radius:12px;object-fit:cover;margin-top:0}
+
+  /* Thumbnail anchored to bottom */
+  #myVideo{position:fixed;right:12px;bottom:12px;width:120px;height:160px;border-radius:10px;overflow:hidden;border:2px solid #1dd1a1;background:#000;object-fit:cover;cursor:pointer;z-index:1000;transition:bottom .3s ease;box-shadow:0 0 15px 3px rgba(29,209,161,0.7);}
+
+  /* Controls centered */
+  .controls{position:fixed;left:50%;bottom:180px;transform:translateX(-50%);display:flex;gap:40px;z-index:1100}
+  .btn{width:120px;height:120px;border-radius:999px;border:none;background:linear-gradient(135deg,#ffffff16,#ffffff0a);display:flex;align-items:center;justify-content:center;font-size:42px;color:white;cursor:pointer;box-shadow:0 8px 24px rgba(0,0,0,0.4)}
+  .btn.ready{background:linear-gradient(135deg,#ff9f43,#ff6b01)}
+  .btn.call{background:linear-gradient(135deg,#1dd1a1,#2ecc71)}
+
+  /* Toggle button */
+  .smallAction{position:fixed;left:14px;bottom:14px;width:56px;height:56px;border-radius:50%;box-shadow:0 0 10px 2px white;cursor:pointer;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.08)}
+  .smallAction button{background:none;border:none;font-size:28px;cursor:pointer;color:white;width:100%;height:100%}
+
+  /* Full-screen overlay menu */
+  .overlayControls{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7);backdrop-filter:blur(6px);display:none;flex-direction:column;align-items:center;justify-content:flex-start;padding:20px;box-sizing:border-box;overflow-y:auto}
+  .menuHeader{font-size:16px;color:#fff;margin:10px 0}
+  .menuSection{display:flex;flex-direction:column;gap:8px;align-items:center;width:100%;max-width:90%;padding:10px}
+  .smallBtn{width:100%;max-width:280px;height:45px;border-radius:10px;border:none;background:linear-gradient(135deg,#ffffff10,#ffffff06);font-size:13px;cursor:pointer;color:white;font-weight:600}
+  .controlRow{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}
+  .label{font-size:13px;color:var(--muted);margin:8px 0}
+  select{width:100%;max-width:280px;padding:8px;border-radius:8px;border:1px solid rgba(255,255,255,0.04);background:transparent;color:#e6eef8;font-size:13px}
+  .modeBtn{width:100%;max-width:280px;height:50px;border-radius:10px;border:none;background:linear-gradient(135deg,#1dd1a1,#2ecc71);font-size:14px;cursor:pointer;color:white;font-weight:600}
+
+  /* Toasts */
+  #toasts{position:fixed;left:50%;transform:translateX(-50%);top:18px;z-index:2000;display:flex;flex-direction:column;gap:8px}
+  .toast{background:#0e1720;padding:10px 14px;border-radius:10px;border:1px solid rgba(255,255,255,0.03);box-shadow:0 6px 20px rgba(2,6,23,0.6);opacity:0;transform:translateY(-6px);transition:all .28s ease}
+  .toast.show{opacity:1;transform:translateY(0)}
+
+  /* Health stats */
+  #health{position:fixed;left:14px;top:18px;font-size:12px;color:var(--muted);z-index:1000}
+
+  @media(min-width:720px){
+    #myVideo{width:160px;height:210px;right:18px}
+    .btn{width:130px;height:130px;font-size:46px}
+    .smallBtn{max-width:320px;height:50px;font-size:14px}
+    .modeBtn{max-width:320px;font-size:15px}
+    select{max-width:320px;font-size:14px}
+    .menuHeader{font-size:18px}
+    .menuSection{max-width:500px}
+  }
+</style>
+</head>
+<body>
+<div class="screen">
+  <video id="remoteVideo" autoplay playsinline></video>
+  <video id="myVideo" autoplay muted playsinline></video>
+  <div id="health">Ping: -- ms | Bitrate: -- KB</div>
+
+  <div class="controls" id="controlsArea">
+    <button class="btn ready" id="readyBtn" onclick="hostReady()">✅</button>
+    <button class="btn call" id="createBtn" onclick="createHostRoom()">📡</button>
+  </div>
+
+  <div class="smallAction" id="appleBtnWrap">
+    <button id="menuBtn" onclick="toggleMenu()">🍎</button>
+  </div>
+
+  <div class="overlayControls" id="overlay">
+    <button class="modeBtn" onclick="showHostControls()">Host Controls</button>
+    <button class="modeBtn" onclick="showGuestControls()">Guest Controls</button>
+    <div class="menuSection" id="hostControls" style="display:none">
+      <div class="menuHeader">Host Controls</div>
+      <div class="controlRow">
+        <button class="smallBtn" onclick="toggleLocalMic(false)">Mute Mic</button>
+        <button class="smallBtn" onclick="toggleLocalMic(true)">Unmute Mic</button>
+        <button class="smallBtn" onclick="toggleLocalCam(false)">Disable Cam</button>
+        <button class="smallBtn" onclick="toggleLocalCam(true)">Enable Cam</button>
+      </div>
+      <div class="controlRow">
+        <button class="smallBtn" onclick="toggleLocalSpeaker()">Toggle Speaker</button>
+        <button class="smallBtn" onclick="switchLocalCamera()">Switch Camera</button>
+        <button class="smallBtn" onclick="toggleLocalMirror()">Toggle Mirror</button>
+      </div>
+      <div class="label">Quality</div>
+      <select id="qualitySelect" onchange="changeQuality()">
+        <option value="auto" selected>Auto</option>
+        <option value="low">Low</option>
+        <option value="medium">Medium</option>
+        <option value="high">High</option>
+      </select>
+      <button class="smallBtn" onclick="closeMenu()">Close</button>
+    </div>
+    <div class="menuSection" id="guestControls" style="display:none">
+      <div class="menuHeader">Guest Controls</div>
+      <div class="controlRow">
+        <button class="smallBtn" onclick="sendGuestCommand('toggleMic', false)">Mute Mic</button>
+        <button class="smallBtn" onclick="sendGuestCommand('toggleMic', true)">Unmute Mic</button>
+        <button class="smallBtn" onclick="sendGuestCommand('toggleCam', false)">Disable Cam</button>
+        <button class="smallBtn" onclick="sendGuestCommand('toggleCam', true)">Enable Cam</button>
+      </div>
+      <div class="controlRow">
+        <button class="smallBtn" onclick="sendGuestCommand('toggleSpeaker', true)">Toggle Speaker</button>
+        <button class="smallBtn" onclick="sendGuestCommand('switchCamera')">Switch Camera</button>
+        <button class="smallBtn" onclick="sendGuestCommand('toggleMirror')">Toggle Mirror</button>
+      </div>
+      <div class="label">Guest Quality</div>
+      <select id="guestQualitySelect" onchange="sendGuestCommand('setQuality', this.value)">
+        <option value="auto" selected>Auto</option>
+        <option value="low">Low</option>
+        <option value="medium">Medium</option>
+        <option value="high">High</option>
+      </select>
+      <button class="smallBtn" onclick="closeMenu()">Close</button>
+    </div>
+  </div>
+
+  <div id="toasts"></div>
+</div>
+
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<script>
+const ROOM_CODE = '&game_id=3';
+const HOST_PEER_ID = 'host-' + btoa(ROOM_CODE).replace(/=*$/,'');
+let peer = null, localStream = null, currentCall = null, dataConn = null;
+let healthInterval = null, pingStats = { rtt: null }, videoSender = null;
+let currentQuality = 'auto', overlayVisible = false;
+let facingMode = 'user', mirrorOn = false, guestFacingMode = 'user';
+let isSwapped = false;
+
+function toast(msg, timeout=3500){
+  const node = document.createElement('div');
+  node.className = 'toast';
+  node.innerText = msg;
+  document.getElementById('toasts').appendChild(node);
+  setTimeout(()=> node.classList.add('show'), 10);
+  setTimeout(()=>{ node.classList.remove('show'); setTimeout(()=>node.remove(), 300);}, timeout);
+}
+
+function log(msg){
+  console.log('[HOST]', msg); // Silent logging for debugging
+}
+
+/* --- Video swap --- */
+function swapVideos(){
+  isSwapped = !isSwapped;
+  const myVideo = document.getElementById('myVideo');
+  const remoteVideo = document.getElementById('remoteVideo');
+  const myStream = myVideo.srcObject;
+  const remoteStream = remoteVideo.srcObject;
+  
+  myVideo.srcObject = remoteStream;
+  remoteVideo.srcObject = myStream;
+  
+  myVideo.style.width = isSwapped ? '100%' : '120px';
+  myVideo.style.height = isSwapped ? '100vh' : '160px';
+  myVideo.style.right = isSwapped ? '0' : '12px';
+  myVideo.style.bottom = isSwapped ? '0' : '12px';
+  myVideo.style.borderRadius = isSwapped ? '12px' : '10px';
+  myVideo.style.border = isSwapped ? 'none' : '2px solid #1dd1a1';
+  myVideo.style.boxShadow = isSwapped ? 'none' : '0 0 15px 3px rgba(29,209,161,0.7)';
+  
+  remoteVideo.style.width = isSwapped ? '120px' : '100%';
+  remoteVideo.style.height = isSwapped ? '160px' : '100vh';
+  remoteVideo.style.right = isSwapped ? '12px' : '0';
+  remoteVideo.style.bottom = isSwapped ? '12px' : '0';
+  remoteVideo.style.borderRadius = isSwapped ? '10px' : '12px';
+  remoteVideo.style.border = isSwapped ? '2px solid #1dd1a1' : 'none';
+  remoteVideo.style.boxShadow = isSwapped ? '0 0 15px 3px rgba(29,209,161,0.7)' : 'none';
+  
+  applyMirror();
+  applyGuestMirror();
+  log('Videos swapped: ' + (isSwapped ? 'local full-screen' : 'remote full-screen'));
+  toast(isSwapped ? 'Local video full-screen' : 'Guest video full-screen');
+}
+
+/* --- Menu toggle --- */
+function toggleMenu(){
+  overlayVisible = !overlayVisible;
+  document.getElementById('overlay').style.display = overlayVisible ? 'flex' : 'none';
+  document.getElementById('hostControls').style.display = 'none';
+  document.getElementById('guestControls').style.display = 'none';
+  document.getElementById('menuBtn').disabled = overlayVisible;
+}
+
+function showHostControls(){
+  document.getElementById('hostControls').style.display = 'flex';
+  document.getElementById('guestControls').style.display = 'none';
+}
+
+function showGuestControls(){
+  document.getElementById('hostControls').style.display = 'none';
+  document.getElementById('guestControls').style.display = 'flex';
+}
+
+function closeMenu(){
+  overlayVisible = false;
+  document.getElementById('overlay').style.display = 'none';
+  document.getElementById('hostControls').style.display = 'none';
+  document.getElementById('guestControls').style.display = 'none';
+  document.getElementById('menuBtn').disabled = false;
+}
+
+/* --- Media & Peer init --- */
+async function hostReady(){
+  try{
+    localStream = await navigator.mediaDevices.getUserMedia({ 
+      video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 }, facingMode: facingMode }, 
+      audio: { echoCancellation: true, noiseSuppression: true } 
+    });
+    document.getElementById('myVideo').srcObject = localStream;
+    applyMirror();
+    log('Ready: camera & mic acquired.');
+    toast('Ready ✔');
+    if(!peer){
+      peer = new Peer({
+        config: {
+          iceServers: [
+            { urls: 'stun:stun.l.google.com:19302' },
+            { urls: 'stun:stun1.l.google.com:19302' }
+          ]
+        },
+        debug: 3
+      });
+      peer.on('open', id => log('Connected to PeerJS (temp id: ' + id + ')'));
+      peer.on('error', e => {
+        log('Peer error: ' + JSON.stringify(e));
+        toast('Peer connection error: ' + e.type, 5000);
+      });
+    }
+    // Set quality to high by default
+    currentQuality = 'high';
+    document.getElementById('qualitySelect').value = 'high';
+    applyQualityLocal('high');
+  }catch(err){
+    log('Media error: ' + err);
+    alert('Camera/Mic required: ' + err);
+  }
+}
+
+function createHostRoom(){
+  if(!localStream){ 
+    alert('Press Ready first'); 
+    return; 
+  }
+  if(peer){ 
+    try{ 
+      peer.destroy(); 
+      log('Previous peer destroyed');
+    }catch(e){ 
+      log('Peer destroy error: ' + e); 
+    } 
+  }
+  peer = new Peer(HOST_PEER_ID, {
+    config: {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    },
+    debug: 3
+  });
+  peer.on('open', id => {
+    log('Room created: ' + ROOM_CODE);
+    toast('Room created — waiting for guest');
+    const controlsArea = document.getElementById('controlsArea');
+    if (controlsArea) controlsArea.remove(); // Remove controls completely
+  });
+  peer.on('connection', conn => {
+    dataConn = conn;
+    log('Data conn from guest: ' + conn.peer);
+    conn.on('data', handleIncomingData);
+    conn.on('close', () => { 
+      log('Guest data closed'); 
+      dataConn = null; 
+      toast('Guest disconnected', 3000);
+      guestFacingMode = 'user'; // Reset on disconnect
+      applyGuestMirror();
+    });
+    conn.on('error', e => {
+      log('Data conn error: ' + JSON.stringify(e));
+      toast('Data connection error', 5000);
+    });
+  });
+  peer.on('call', call => {
+    log('Incoming call from: ' + call.peer);
+    if (!localStream) {
+      log('No local stream to answer call');
+      toast('Error: No camera/mic available', 5000);
+      return;
+    }
+    call.answer(localStream); // Send localStream to guest
+    currentCall = call;
+    call.on('stream', remoteStream => {
+      document.getElementById('remoteVideo').srcObject = remoteStream;
+      log('Remote stream connected.');
+      toast('Guest connected ✅', 2000);
+      setTimeout(() => attachSender(call), 500);
+      startHealthChecks();
+      // Request guest camera info
+      if (dataConn && dataConn.open) {
+        sendGuestCommand('reportCamera', true);
+      }
+    });
+    call.on('close', () => { 
+      log('Call closed'); 
+      stopHealthChecks(); 
+      document.getElementById('remoteVideo').srcObject = null;
+      toast('Call ended', 3000);
+      guestFacingMode = 'user'; // Reset on disconnect
+      applyGuestMirror();
+    });
+    call.on('error', e => {
+      log('Call error: ' + JSON.stringify(e));
+      toast('Call error occurred: ' + e.type, 5000);
+    });
+  });
+  peer.on('error', e => {
+    log('Peer error: ' + JSON.stringify(e));
+    toast('Peer connection error: ' + e.type, 5000);
+  });
+}
+
+/* --- Attach sender --- */
+function attachSender(call){
+  try{
+    const pc = call.peerConnection || call._pc || call._connection;
+    if(pc && pc.getSenders){
+      const senders = pc.getSenders();
+      videoSender = senders.find(s => s.track && s.track.kind === 'video');
+      log('Video sender found: ' + (videoSender ? 'OK' : 'no'));
+      if (videoSender && localStream) {
+        const videoTrack = localStream.getVideoTracks()[0];
+        videoSender.replaceTrack(videoTrack).catch(e => {
+          log('replaceTrack error: ' + e);
+          toast('Failed to send video track', 5000);
+        });
+        // Ensure high quality
+        applyQualityLocal(currentQuality);
+      }
+    } else {
+      log('Could not access RTCPeerConnection for sender.');
+      toast('Failed to attach video sender', 5000);
+    }
+  }catch(e){ 
+    log('attachSender error: ' + e); 
+    toast('Sender attachment error', 5000);
+  }
+}
+
+/* --- Local controls --- */
+function toggleLocalMic(enable){ 
+  if(!localStream) return; 
+  const t = localStream.getAudioTracks()[0]; 
+  t.enabled = enable; 
+  log(enable ? 'Local mic ON' : 'Local mic OFF'); 
+  toast(enable ? 'Mic ON' : 'Mic OFF'); 
+}
+function toggleLocalCam(enable){ 
+  if(!localStream) return; 
+  const t = localStream.getVideoTracks()[0]; 
+  t.enabled = enable; 
+  log(enable ? 'Local cam ON' : 'Local cam OFF'); 
+  toast(enable ? 'Cam ON' : 'Cam OFF'); 
+}
+function toggleLocalSpeaker(){ 
+  const rv = document.getElementById('remoteVideo'); 
+  rv.muted = !rv.muted; 
+  log(rv.muted ? 'Remote muted locally' : 'Remote unmuted locally'); 
+  toast(rv.muted ? 'Speaker OFF' : 'Speaker ON'); 
+}
+
+async function switchLocalCamera(){
+  if(!localStream) return;
+  facingMode = facingMode === 'user' ? 'environment' : 'user';
+  try {
+    localStream.getTracks().forEach(track => track.stop());
+    localStream = await navigator.mediaDevices.getUserMedia({ 
+      video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 }, facingMode: facingMode }, 
+      audio: { echoCancellation: true, noiseSuppression: true } 
+    });
+    document.getElementById('myVideo').srcObject = localStream;
+    if (currentCall) {
+      const videoTrack = localStream.getVideoTracks()[0];
+      const sender = currentCall.peerConnection.getSenders().find(s => s.track && s.track.kind === 'video');
+      if (sender) {
+        await sender.replaceTrack(videoTrack);
+        log('Camera switched and track replaced');
+        toast(`Switched to ${facingMode === 'user' ? 'front' : 'back'} camera`);
+        // Re-apply quality after camera switch
+        applyQualityLocal(currentQuality);
+      } else {
+        log('No video sender found for camera switch');
+        toast('Failed to switch camera', 3000);
+      }
+    }
+    applyMirror();
+  } catch (e) {
+    log('Camera switch failed: ' + e);
+    toast('Failed to switch camera', 3000);
+  }
+}
+
+function toggleLocalMirror(){
+  if(!localStream) return;
+  mirrorOn = !mirrorOn;
+  applyMirror();
+  log(mirrorOn ? 'Local mirror ON' : 'Local mirror OFF');
+  toast(mirrorOn ? 'Mirror ON' : 'Mirror OFF');
+}
+
+function applyMirror(){
+  const myVideo = document.getElementById('myVideo');
+  if (myVideo.srcObject === localStream) {
+    myVideo.style.transform = mirrorOn ? 'scaleX(-1)' : '';
+  } else {
+    myVideo.style.transform = guestFacingMode === 'user' ? 'scaleX(-1)' : '';
+  }
+}
+
+function applyGuestMirror(){
+  const remoteVideo = document.getElementById('remoteVideo');
+  if (remoteVideo.srcObject && !isSwapped) {
+    remoteVideo.style.transform = guestFacingMode === 'user' ? 'scaleX(-1)' : '';
+  } else if (remoteVideo.srcObject && isSwapped) {
+    remoteVideo.style.transform = mirrorOn ? 'scaleX(-1)' : '';
+  } else {
+    remoteVideo.style.transform = '';
+  }
+}
+
+/* --- Commands --- */
+function sendGuestCommand(type, value){
+  if(!dataConn || dataConn.open === false){ 
+    toast('No guest connected'); 
+    log('No guest to send command'); 
+    return; 
+  }
+  const obj = { type, value };
+  dataConn.send(JSON.stringify(obj));
+  log('Sent: ' + JSON.stringify(obj));
+  toast('Sent command: ' + type, 1500);
+}
+
+/* --- Quality --- */
+async function changeQuality(){
+  const v = document.getElementById('qualitySelect').value;
+  currentQuality = v;
+  toast('Quality: ' + v);
+  log('Quality requested: ' + v);
+  applyQualityLocal(v);
+}
+
+async function applyQualityLocal(mode){
+  if(!videoSender){ 
+    log('No video sender to modify'); 
+    toast('No video sender available', 3000);
+    return; 
+  }
+  try{
+    const params = videoSender.getParameters();
+    if(!params.encodings || params.encodings.length === 0) params.encodings = [{}];
+    const enc = params.encodings[0];
+    if(mode === 'low'){ 
+      enc.maxBitrate = 150000; 
+      enc.scaleResolutionDownBy = 4; 
+      enc.maxFramerate = 15; 
+    }
+    else if(mode === 'medium'){ 
+      enc.maxBitrate = 500000; 
+      enc.scaleResolutionDownBy = 2; 
+      enc.maxFramerate = 24; 
+    }
+    else if(mode === 'high'){ 
+      enc.maxBitrate = 2000000; 
+      enc.scaleResolutionDownBy = 1; 
+      enc.maxFramerate = 30; 
+    }
+    else { 
+      delete enc.maxBitrate; 
+      delete enc.scaleResolutionDownBy; 
+      delete enc.maxFramerate; 
+    }
+    await videoSender.setParameters(params);
+    log('Applied local sender params: ' + JSON.stringify(enc));
+    toast('Quality applied: ' + mode, 1500);
+  }catch(e){
+    log('setParameters failed: ' + e);
+    toast('Failed to set quality', 3000);
+  }
+}
+
+/* --- Health checks --- */
+function startHealthChecks(){
+  if(healthInterval) clearInterval(healthInterval);
+  healthInterval = setInterval(async () => {
+    if(dataConn && dataConn.open){
+      const t0 = Date.now();
+      try{
+        dataConn.send(JSON.stringify({ type: 'PING', t0 }));
+      }catch(e){ 
+        log('Ping send error: ' + e); 
+        toast('Ping failed', 3000);
+      }
+    }
+    if(currentCall){
+      try{
+        const pc = currentCall.peerConnection || currentCall._pc || currentCall._connection;
+        if(pc && pc.getStats){
+          const stats = await pc.getStats();
+          let bitrate = '--';
+          stats.forEach(report => {
+            if(report.type === 'outbound-rtp' && report.kind === 'video' && report.bytesSent){
+              bitrate = Math.round((report.bytesSent || 0) / 1024);
+            }
+            if(report.type === 'inbound-rtp' && report.kind === 'video' && report.bytesReceived){
+              bitrate = Math.round((report.bytesReceived || 0) / 1024);
+            }
+          });
+          document.getElementById('health').innerText = `Ping: ${pingStats.rtt || '--'} ms | Bitrate: ${bitrate} KB`;
+        }
+      }catch(e){ 
+        log('getStats error: ' + e); 
+        toast('Stats fetch failed', 3000);
+      }
+    }
+  }, 2000);
+}
+function stopHealthChecks(){ 
+  if(healthInterval) clearInterval(healthInterval); 
+  document.getElementById('health').innerText = 'Ping: -- ms | Bitrate: --'; 
+}
+
+/* --- Handle incoming data --- */
+function handleIncomingData(data){
+  try {
+    const obj = typeof data === 'string' ? JSON.parse(data) : data;
+    if(obj.type === 'PONG' && obj.t0){
+      const rtt = Date.now() - obj.t0;
+      pingStats.rtt = rtt;
+      log('PONG received, RTT: ' + rtt + 'ms');
+    } else if(obj.type === 'cameraInfo' && obj.facingMode){
+      guestFacingMode = obj.facingMode;
+      log('Guest camera: ' + guestFacingMode);
+      applyGuestMirror();
+    }
+  } catch(e) {
+    log('Invalid guest data: ' + e);
+    toast('Invalid guest data', 3000);
+  }
+}
+
+/* --- Cleanup --- */
+window.addEventListener('beforeunload', () => { 
+  try{ 
+    if(peer) peer.destroy(); 
+  }catch(e){ 
+    log('Cleanup error: ' + e); 
+  } 
+});
+
+document.getElementById('myVideo').addEventListener('click', swapVideos);
+</script>
+</body>
+</html>
